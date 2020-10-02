@@ -5,30 +5,40 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 
+#define TYPING_ANIMATION_DELAY 20
 #define JSON_DOC_SIZE 10000
-#define MINUTES_INBETWEEN_CHECKS 1
+#define uS_TO_S_FACTOR 1000000  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP  300       /* Time ESP32 will go to sleep (in seconds) */
 
-const char* requestAddress = "https://habitica.com/api/v3/tasks/user";
+RTC_DATA_ATTR int bootCount = 0;
+
+const char* requestAddress = "https://habitica.com/api/v3/tasks/user?type=todos";
 String response;
 
 TFT_eSPI tft = TFT_eSPI();
 
 void setup() {
   Serial.begin(115200);
-  
+
+  // wakeup stuff
+  ++bootCount;
+  Serial.print("Boot number: " + String(bootCount) + "; ");
+  print_wakeup_reason();
+
+  // init TFT
   tft.init();
   tft.setRotation(1);
   tft.setTextWrap(true, true);
   tft.setTextPadding(2);
   tft.fillScreen(TFT_BLACK);
 
-  Serial.print("Screen width: ");
-  Serial.println(tft.width());
-  Serial.print("Screen height: ");
-  Serial.println(tft.height());
-}
+//  Serial.print("Screen width: ");
+//  Serial.println(tft.width());
+//  Serial.print("Screen height: ");
+//  Serial.println(tft.height());
 
-void loop() {
+  writeToTFT("Remember this ToDo task?", true);
+
   // connect to wifi
   connectToWifi();
   
@@ -37,39 +47,54 @@ void loop() {
   Serial.print("Randomly selected task: ");
   Serial.println(taskText);
   
-  // print everything
-  writeToTFT(taskText);
-  delay(2000);
-
   // disconnect wifi
   WiFi.disconnect();
-  Serial.println("Disconnecting Wifi");
+//  Serial.println("Disconnecting Wifi");
   
-  // wait for a while
+  // print everything
+  tft.fillScreen(TFT_BLACK);
+  delay(500);
+  
+  writeToTFT(taskText, true);
+  delay(1000);
+  tft.fillScreen(TFT_BLACK);
+  delay(100);
+  writeToTFT(taskText, false);
+  delay(500);
+  tft.fillScreen(TFT_BLACK);
+  delay(100);
+  writeToTFT(taskText, false);
+  delay(500);
+  tft.fillScreen(TFT_BLACK);
+  delay(100);
+  writeToTFT(taskText, false);
+  delay(10000);
+  
+  // go to sleep for a while
+  tft.fillScreen(TFT_BLACK);
   tft.writecommand(0x10); // put tft to sleep
-  Serial.print(MINUTES_INBETWEEN_CHECKS);
-  Serial.println(" minutes, then checking again...");
-  delay(1000 * 60 * MINUTES_INBETWEEN_CHECKS); // wait MINUTES_INBETWEEN_CHECKS minutes before trying again
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * uS_TO_S_FACTOR);
+  Serial.println("Going to sleep for " + String(TIME_TO_SLEEP) + " seconds");
+  Serial.flush(); 
+  esp_deep_sleep_start();
 }
 
-void writeToTFT(String taskText) {
-  tft.init();
-  tft.setRotation(1);
-  tft.setTextWrap(true, true);
-  tft.setTextPadding(2);
-  tft.fillScreen(TFT_BLACK);
+void loop() {
   
+}
+
+void writeToTFT(String taskText, bool animate) {
   // Set "cursor" at top left corner of display (0,0) and select font 4
   tft.setCursor(0, 0, 4);
 
-  // Set the font colour to be white with a black background
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  // Set the font colour to be white with no background
+  tft.setTextColor(TFT_WHITE, TFT_WHITE);
 
   // We can now plot text on screen using the "print" class
-  recursiveWordWrapPrint(taskText);
+  recursiveWordWrapPrint(taskText, animate);
 }
 
-void recursiveWordWrapPrint(String text) {
+void recursiveWordWrapPrint(String text, bool animate) {
   if (text == "") return;
 
   // does it fit?
@@ -87,16 +112,37 @@ void recursiveWordWrapPrint(String text) {
 //    Serial.println(lastSpace);
     
     if (lastSpace == -1) { // no space found, default to last char and add a hyphen
-      tft.println((text.substring(0, maxCharThisLine - 2) + "-"));
-      recursiveWordWrapPrint(text.substring(maxCharThisLine - 2));
+      if (!animate) tft.println((text.substring(0, maxCharThisLine - 2) + "-"));
+      else {
+        for (int i=0; i < maxCharThisLine - 2; i++){
+          tft.print(text.charAt(i));
+          delay(TYPING_ANIMATION_DELAY);
+        }
+        tft.print("-\n");
+        delay(TYPING_ANIMATION_DELAY);
+      }
+      recursiveWordWrapPrint(text.substring(maxCharThisLine - 2), animate);
     }
     else { // a space was found, chop the string there
-      tft.println(text.substring(0, lastSpace));
-      recursiveWordWrapPrint(text.substring(lastSpace + 1));
+      if (!animate) tft.println(text.substring(0, lastSpace));
+      else {
+        for (int i=0; i < lastSpace; i++){
+          tft.print(text.charAt(i));
+          delay(TYPING_ANIMATION_DELAY);
+        }
+        tft.println();
+      }
+      recursiveWordWrapPrint(text.substring(lastSpace + 1), animate);
     }
   }
   else {
-    tft.println(text);
+    if (!animate) tft.println(text);
+    else {
+      for (int i=0; i < text.length(); i++){
+          tft.print(text.charAt(i));
+          delay(TYPING_ANIMATION_DELAY);
+        }
+    }
   }
 }
 
@@ -174,4 +220,20 @@ String makeAPIRequest() {
   // Free resources
   http.end();
   return result;
+}
+
+void print_wakeup_reason(){
+  esp_sleep_wakeup_cause_t wakeup_reason;
+
+  wakeup_reason = esp_sleep_get_wakeup_cause();
+
+  switch(wakeup_reason)
+  {
+    case ESP_SLEEP_WAKEUP_EXT0 : Serial.println("Wakeup caused by external signal using RTC_IO"); break;
+    case ESP_SLEEP_WAKEUP_EXT1 : Serial.println("Wakeup caused by external signal using RTC_CNTL"); break;
+    case ESP_SLEEP_WAKEUP_TIMER : Serial.println("Wakeup caused by timer"); break;
+    case ESP_SLEEP_WAKEUP_TOUCHPAD : Serial.println("Wakeup caused by touchpad"); break;
+    case ESP_SLEEP_WAKEUP_ULP : Serial.println("Wakeup caused by ULP program"); break;
+    default : Serial.printf("Wakeup was not caused by deep sleep: %d\n",wakeup_reason); break;
+  }
 }
