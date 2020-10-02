@@ -4,8 +4,10 @@
 #include "secrets.h"
 
 const char* requestAddress = "https://habitica.com/api/v3/tasks/user";
-
 String response;
+
+#define JSON_DOC_SIZE 10000
+DynamicJsonDocument jsonResponse(JSON_DOC_SIZE);
 
 void setup() {
   Serial.begin(115200);
@@ -20,15 +22,26 @@ void setup() {
   Serial.print("Connected to WiFi network with IP Address: ");
   Serial.println(WiFi.localIP());
       
-  response = httpGETRequest(requestAddress);
-  Serial.println(response);
+  httpGETRequest(requestAddress);
+
+//  serializeJsonPretty(jsonResponse, Serial);
+  JsonArray jsonArray = jsonResponse["data"].as<JsonArray>();
+  
+  int numOfTasks = jsonArray.size();
+  Serial.println(numOfTasks);
+  
+  int randomTaskIndex = random(numOfTasks);
+  Serial.println(randomTaskIndex);
+
+  JsonVariant task = jsonArray[randomTaskIndex];
+  Serial.println(task["text"].as<String>());
 }
 
 void loop() {
 
 }
 
-String httpGETRequest(const char* requestAddress) {
+void httpGETRequest(const char* requestAddress) {
   HTTPClient http;
   
   // Your IP address with path or Domain name with URL path 
@@ -42,43 +55,34 @@ String httpGETRequest(const char* requestAddress) {
   // Send HTTP POST request
   int httpResponseCode = http.GET();
   
-  String payload = "{}"; 
-  
-  if (httpResponseCode>0) {
+  if (httpResponseCode > 0) {
     Serial.print("HTTP Response code: ");
     Serial.println(httpResponseCode);
 
-     // get lenght of document (is -1 when Server sends no Content-Length header)
-      int len = http.getSize();
+    // The filter: it contains "true" for each value we want to keep
+    DynamicJsonDocument filter(JSON_DOC_SIZE);
+    filter["data"][0]["text"] = true;
 
-      // create buffer for read
-      uint8_t buff[128] = { 0 };
+    Serial.print("JSON doc capacity: ");
+    Serial.println(jsonResponse.capacity());
 
-      // get tcp stream
-      WiFiClient * stream = http.getStreamPtr();
+    // Parse JSON object
+    DeserializationError error = deserializeJson(jsonResponse, http.getStream(), DeserializationOption::Filter(filter));
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.c_str());
+      return;
+    }
+    else {
+//      Serial.print("Shrinking JSON doc...");
+//      jsonResponse.shrinkToFit();
 
-      // read all data from server
-      while(http.connected() && (len > 0 || len == -1)) {
-          // get available data size
-          size_t size = stream->available();
-
-          if(size) {
-              // read up to 128 byte
-              int c = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
-
-              // write it to Serial
-              Serial.write(buff, c);
-
-              if(len > 0) {
-                  len -= c;
-              }
-          }
-          delay(1);
-      }
-
-      Serial.println();
-      Serial.print("[HTTP] connection closed or file end.\n");
-//    payload = http.getString();
+      Serial.print("JSON doc memory usage: ");
+      Serial.println(jsonResponse.memoryUsage());
+      
+      // Print the result
+//      serializeJsonPretty(jsonResponse, Serial);
+    }
   }
   else {
     Serial.print("Error code: ");
@@ -86,6 +90,4 @@ String httpGETRequest(const char* requestAddress) {
   }
   // Free resources
   http.end();
-
-  return payload;
 }
